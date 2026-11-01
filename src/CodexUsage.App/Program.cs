@@ -15,7 +15,7 @@ internal static class Program
 
         using var singleInstance = new Mutex(
             initiallyOwned: true,
-            name: "Local\\CodexUsage.Tray.SingleInstance",
+            name: "Local\\CodexUsageNotif.Tray.SingleInstance",
             createdNew: out var isFirstInstance);
 
         if (!isFirstInstance)

@@ -3,6 +3,7 @@ using System.Globalization;
 using CodexUsage.App.Settings;
 using CodexUsage.History;
 using CodexUsage.Models;
+using CodexUsage.Resets;
 
 namespace CodexUsage.App.UI;
 
@@ -120,6 +121,32 @@ internal static class PreviewRenderer
             historyForm.DrawToBitmap(historyBitmap, new Rectangle(Point.Empty, historyForm.Size));
             historyBitmap.Save(outputPath, ImageFormat.Png);
             historyForm.Hide();
+            return true;
+        }
+
+        if (args[0].Equals("--render-calendar", StringComparison.OrdinalIgnoreCase)
+            || args[0].Equals("--render-calendar=dark", StringComparison.OrdinalIgnoreCase)
+            || args[0].Equals("--render-calendar=light", StringComparison.OrdinalIgnoreCase))
+        {
+            var theme = args[0].EndsWith("=light", StringComparison.OrdinalIgnoreCase) ? ThemeMode.Light : ThemeMode.Dark;
+            var previewNow = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+            var events = new[]
+            {
+                new ResetEvent("1", "Confirmed global reset", "https://codex-reset.com/", previewNow.AddDays(-5), previewNow.AddDays(-4), null, ResetKind.ConfirmedGlobal, "high", "verified"),
+                new ResetEvent("2", "Banked reset", null, null, previewNow.AddDays(-9), null, ResetKind.Banked, "high", "verified"),
+                new ResetEvent("3", "Announcement", null, previewNow.AddDays(-14), null, null, ResetKind.Announced, "medium", "announced"),
+                new ResetEvent("4", "Uncertain report", null, previewNow.AddDays(-20), null, null, ResetKind.Uncertain, "low", "unverified"),
+            };
+            using var calendarForm = new PopupForm(new AppSettings { Theme = theme });
+            calendarForm.UpdateResetData(new ResetData { Events = events, TimelineFetchedAt = previewNow, ForecastFetchedAt = previewNow, Forecast = new ResetForecast(15, 28, "low", null, previewNow, null, true) }, false, previewNow);
+            calendarForm.PrepareOffscreenPreview();
+            calendarForm.SetCalendarVisible(true);
+            calendarForm.Show();
+            Application.DoEvents();
+            using var calendarBitmap = new Bitmap(calendarForm.ClientSize.Width, calendarForm.ClientSize.Height);
+            calendarForm.DrawToBitmap(calendarBitmap, new Rectangle(Point.Empty, calendarForm.ClientSize));
+            calendarBitmap.Save(outputPath, ImageFormat.Png);
+            calendarForm.Hide();
             return true;
         }
 

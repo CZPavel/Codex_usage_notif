@@ -1,10 +1,14 @@
 using System.Runtime.InteropServices;
+using System.Net;
+using System.Globalization;
 using CodexUsage.App.Settings;
 using CodexUsage.App.UI;
 using CodexUsage.Authentication;
 using CodexUsage.Formatting;
 using CodexUsage.History;
 using CodexUsage.Models;
+using CodexUsage.Networking;
+using CodexUsage.Errors;
 using CodexUsage.Parsing;
 using CodexUsage.Services;
 using CodexUsage.Tokens;
@@ -22,9 +26,15 @@ internal static class Program
         try
         {
             ApplicationConfiguration.Initialize();
+            // Text assertions use English AM/PM labels independently of Windows locale.
+            CultureInfo.DefaultThreadCurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            _assertions += ResetCalendarTests.Run();
+            ResetCalendarUiTests.Run();
             ParserReadsStandardUsage();
             ParserHandlesStringValuesAndAdditionalLimits();
             CredentialParserReadsSnakeAndCamelCase();
+            UnauthorizedUsageLeavesCredentialsUntouched().GetAwaiter().GetResult();
             FormattingProducesUsefulLabels();
             HistoryDetectsRestoredQuota();
             HistoryForecastUsesRateSinceReset();
@@ -44,7 +54,7 @@ internal static class Program
 
             if (args.Contains("--live", StringComparer.OrdinalIgnoreCase))
             {
-                await RunLiveCheckAsync();
+                await RunLiveCheckAsync().ConfigureAwait(false);
             }
 
             Console.WriteLine($"PASS: {_assertions} assertions");
@@ -52,8 +62,59 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"FAIL: {exception.Message}");
+            Console.Error.WriteLine($"FAIL: {exception}");
             return 1;
+        }
+    }
+
+    private static async Task UnauthorizedUsageLeavesCredentialsUntouched()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"codexusage-readonly-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "auth.json");
+        const string original = "{\"tokens\":{\"access_token\":\"synthetic-access\",\"refresh_token\":\"synthetic-refresh\"}}";
+        try
+        {
+            await File.WriteAllTextAsync(path, original);
+            foreach (var status in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
+            {
+                using var handler = new DeniedUsageHandler(status);
+                using var http = new HttpClient(handler);
+                using var client = new CodexUsageClient(http);
+                using var service = new CodexUsageService(new CodexCredentialStore(directory), client);
+                var denied = false;
+                try
+                {
+                    await service.FetchAsync();
+                }
+                catch (CodexUsageException exception) when (exception.Kind == CodexUsageErrorKind.Unauthorized)
+                {
+                    denied = true;
+                    Contains("Open Codex", exception.Message, "renew login guidance");
+                }
+
+                Equal(true, denied, "denied usage reported");
+                Equal(1, handler.Requests, "no refresh request");
+                Equal(original, await File.ReadAllTextAsync(path), "credentials unchanged");
+                Equal(1, Directory.GetFiles(directory).Length, "no credential temp files");
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private sealed class DeniedUsageHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            Equal(HttpMethod.Get, request.Method, "usage only GET");
+            Equal(CodexUsageClient.DefaultUsageEndpoint, request.RequestUri, "usage endpoint only");
+            return Task.FromResult(new HttpResponseMessage(status));
         }
     }
 
@@ -685,7 +746,7 @@ internal static class Program
 
         Equal(true, chart.HasLearnedOffHours, "history chart learns off hours");
         Equal(true, chart.HasOffHourSegments, "history chart projects off-hour flats");
-        Equal("11 PM–7 AM", chart.OffHoursDescription, "history chart off-hour description");
+        Equal("11 PM\u20137 AM", chart.OffHoursDescription, "history chart off-hour description");
         Equal(true, toggle.Enabled, "off-hour toggle enabled");
         Equal(true, toggle.Visible, "off-hour toggle shown for learned schedule");
         Equal(true, chart.ShowOffHourSegments, "off-hour flats shown by default");
@@ -883,7 +944,7 @@ internal static class Program
     private static async Task RunLiveCheckAsync()
     {
         using var service = new CodexUsageService();
-        var snapshot = await service.FetchAsync();
+        var snapshot = await service.FetchAsync().ConfigureAwait(false);
         var primary = snapshot.Primary is null ? "n/a" : $"{snapshot.Primary.AvailablePercent:0.#}% available";
         var secondary = snapshot.Secondary is null ? "n/a" : $"{snapshot.Secondary.AvailablePercent:0.#}% available";
         Console.WriteLine($"LIVE: plan={UsageText.PlanLabel(snapshot.PlanType)}, session={primary}, weekly={secondary}");

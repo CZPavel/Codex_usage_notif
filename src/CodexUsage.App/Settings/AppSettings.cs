@@ -13,6 +13,8 @@ public sealed class AppSettings
 
     public bool NotificationsEnabled { get; set; } = true;
 
+    public bool ResetNotificationsEnabled { get; set; }
+
     public int NotificationThresholdPercent { get; set; } = 20;
 
     public ThemeMode Theme { get; set; } = ThemeMode.System;

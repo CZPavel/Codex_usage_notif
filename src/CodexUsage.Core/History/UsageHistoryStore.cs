@@ -24,7 +24,7 @@ public sealed class UsageHistoryStore
     {
         _filePath = filePath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CodexUsage",
+            "CodexUsageNotif",
             "history.jsonl");
     }
 

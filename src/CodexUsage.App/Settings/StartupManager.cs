@@ -5,7 +5,7 @@ namespace CodexUsage.App.Settings;
 public static class StartupManager
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "CodexUsage";
+    private const string ValueName = "CodexUsageNotif";
 
     public static bool IsEnabled()
     {

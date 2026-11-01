@@ -15,7 +15,7 @@ public sealed class AppSettingsStore
     {
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CodexUsage");
+            "CodexUsageNotif");
         _filePath = Path.Combine(directory, "settings.json");
     }
 

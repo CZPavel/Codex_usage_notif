@@ -6,12 +6,16 @@ using CodexUsage.Formatting;
 using CodexUsage.History;
 using CodexUsage.Models;
 using CodexUsage.Services;
+using CodexUsage.Resets;
 
 namespace CodexUsage.App;
 
 public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly CodexUsageService _usageService = new();
+    private readonly ResetCalendarService _resetService = new();
+    private readonly System.Windows.Forms.Timer _resetTimer = new() { Interval = 15 * 60_000 };
+    private bool _resetRefreshing;
     private readonly AppSettingsStore _settingsStore = new();
     private readonly UsageHistoryStore _historyStore = new();
     private readonly PopupForm _popup;
@@ -38,6 +42,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         _popup = new PopupForm(_settings);
         _popup.RefreshRequested += async (_, _) => await RefreshAsync();
         _popup.SettingsRequested += (_, _) => ShowSettings();
+        _popup.ResetRefreshRequested += async (_, _) => await RefreshResetsAsync();
+        _popup.UpdateResetData(_resetService.LoadCached(), false);
 
         _refreshMenuItem = new ToolStripMenuItem("Refresh now");
         _refreshMenuItem.Click += async (_, _) => await RefreshAsync();
@@ -55,6 +61,23 @@ public sealed class TrayApplicationContext : ApplicationContext
         var historyItem = new ToolStripMenuItem("Usage history…");
         historyItem.Click += (_, _) => ShowHistory();
 
+        var calendarItem = new ToolStripMenuItem("Reset Calendar…");
+        calendarItem.Click += (_, _) =>
+        {
+            _popup.SetCalendarVisible(true);
+            _popup.ShowNearTray();
+        };
+        var resetNotifications = new ToolStripMenuItem("Reset notifications")
+        {
+            CheckOnClick = true,
+            Checked = _settings.ResetNotificationsEnabled,
+        };
+        resetNotifications.Click += (_, _) =>
+        {
+            _settings.ResetNotificationsEnabled = resetNotifications.Checked;
+            _settingsStore.Save(_settings);
+        };
+
         var openFolderItem = new ToolStripMenuItem("Open Codex folder");
         openFolderItem.Click += (_, _) => OpenCodexFolder();
 
@@ -66,6 +89,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         [
             _refreshMenuItem,
             historyItem,
+            calendarItem,
+            resetNotifications,
             new ToolStripSeparator(),
             _startupMenuItem,
             settingsItem,
@@ -92,6 +117,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         _refreshTimer.Interval = checked(_settings.RefreshIntervalMinutes * 60_000);
         _refreshTimer.Tick += async (_, _) => await RefreshAsync();
         _refreshTimer.Start();
+        _resetTimer.Tick += async (_, _) => await RefreshResetsAsync();
+        _resetTimer.Start();
 
         UpdateIcon(error: false);
         Application.Idle += OnFirstIdle;
@@ -106,6 +133,9 @@ public sealed class TrayApplicationContext : ApplicationContext
             _loadingAnimationTimer.Dispose();
             _refreshTimer.Stop();
             _refreshTimer.Dispose();
+            _resetTimer.Stop();
+            _resetTimer.Dispose();
+            _resetService.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _renderedIcon?.Dispose();
@@ -127,7 +157,40 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _firstIdleHandled = true;
         Application.Idle -= OnFirstIdle;
-        await RefreshAsync();
+        await Task.WhenAll(RefreshAsync(), RefreshResetsAsync());
+    }
+
+    private async Task RefreshResetsAsync()
+    {
+        if (_resetRefreshing || _shutdown.IsCancellationRequested) return;
+        _resetRefreshing = true;
+        _popup.UpdateResetData(_resetService.Current, true);
+        try
+        {
+            var data = await _resetService.FetchAsync(_shutdown.Token);
+            var newEvents = _resetService.ConsumeNewConfirmedEvents();
+            if (_shutdown.IsCancellationRequested) return;
+            _popup.UpdateResetData(data, false);
+            if (_settings.ResetNotificationsEnabled)
+            {
+                foreach (var reset in newEvents)
+                {
+                    _trayIcon.BalloonTipTitle = reset.Kind == ResetKind.Banked
+                        ? "Codex · banked reset" : "Codex · global reset";
+                    _trayIcon.BalloonTipText = reset.Summary.Length > 220
+                        ? reset.Summary[..220] : reset.Summary;
+                    _trayIcon.BalloonTipIcon = ToolTipIcon.Info;
+                    _trayIcon.ShowBalloonTip(5000);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            // Reset-feed failure must never interrupt the usage tray application.
+            if (!_shutdown.IsCancellationRequested) _popup.UpdateResetData(_resetService.Current, false);
+        }
+        finally { _resetRefreshing = false; }
     }
 
     private async Task RefreshAsync()
@@ -316,7 +379,9 @@ public sealed class TrayApplicationContext : ApplicationContext
                 MessageBoxIcon.Warning);
         }
 
+        var resetNotificationsEnabled = _settings.ResetNotificationsEnabled;
         _settings = form.SelectedSettings.Normalize();
+        _settings.ResetNotificationsEnabled = resetNotificationsEnabled;
         _settingsStore.Save(_settings);
         _refreshTimer.Interval = checked(_settings.RefreshIntervalMinutes * 60_000);
         _popup.ApplyTheme(_settings.Theme);

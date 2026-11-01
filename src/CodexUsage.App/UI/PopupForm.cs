@@ -2,6 +2,7 @@ using System.Drawing.Drawing2D;
 using CodexUsage.App.Settings;
 using CodexUsage.Formatting;
 using CodexUsage.Models;
+using CodexUsage.Resets;
 
 namespace CodexUsage.App.UI;
 
@@ -21,6 +22,8 @@ public sealed class PopupForm : Form
     private readonly Label _updatedLabel = new();
     private readonly Button _refreshButton = new();
     private readonly Button _settingsButton = new();
+    private readonly Button _calendarToggle = new();
+    private readonly ResetCalendarControl _calendar = new();
     private readonly System.Windows.Forms.Timer _countdownTimer = new() { Interval = 30_000 };
 
     private ThemePalette _palette;
@@ -30,6 +33,8 @@ public sealed class PopupForm : Form
     private bool _showCredits;
     private bool _showMessage;
     private string? _error;
+    private bool _calendarVisible;
+    private bool _previewWithoutActivation;
 
     public PopupForm(AppSettings settings)
     {
@@ -55,6 +60,11 @@ public sealed class PopupForm : Form
 
         ConfigureButton(_refreshButton, "Refresh");
         ConfigureButton(_settingsButton, "Settings");
+        ConfigureButton(_calendarToggle, "Calendar");
+        _calendarToggle.Padding = Padding.Empty;
+        _calendar.Visible = false;
+        _calendar.RefreshRequested += (_, _) => ResetRefreshRequested?.Invoke(this, EventArgs.Empty);
+        _calendarToggle.Click += (_, _) => SetCalendarVisible(!_calendarVisible);
         _refreshButton.Click += (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty);
         _settingsButton.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
 
@@ -71,9 +81,15 @@ public sealed class PopupForm : Form
             _updatedLabel,
             _refreshButton,
             _settingsButton,
+            _calendar,
+            _calendarToggle,
         ]);
 
-        _countdownTimer.Tick += (_, _) => RefreshDisplayText();
+        _countdownTimer.Tick += (_, _) =>
+        {
+            if (_calendarVisible) _calendar.UpdateClock(DateTimeOffset.UtcNow);
+            else RefreshDisplayText();
+        };
         VisibleChanged += (_, _) => _countdownTimer.Enabled = Visible;
         Deactivate += (_, _) => Hide();
         KeyDown += (_, eventArgs) =>
@@ -92,7 +108,33 @@ public sealed class PopupForm : Form
 
     public event EventHandler? SettingsRequested;
 
-    protected override bool ShowWithoutActivation => false;
+    public event EventHandler? ResetRefreshRequested;
+
+    public void UpdateResetData(ResetData? data, bool refreshing) => _calendar.SetData(data, refreshing);
+
+    public void UpdateResetData(ResetData? data, bool refreshing, DateTimeOffset now) => _calendar.SetData(data, refreshing, now);
+
+    public void SetCalendarVisible(bool visible)
+    {
+        _calendarVisible = visible;
+        foreach (var control in new Control[] { _titleLabel, _planLabel, _accountLabel, _primaryMeter, _secondaryMeter, _additionalMeter, _creditsLabel, _messageLabel, _updatedLabel, _refreshButton, _settingsButton })
+            control.Visible = !visible;
+        _calendar.Visible = visible;
+        _calendarToggle.Text = visible ? "Usage" : "Calendar";
+        if (visible && !_previewWithoutActivation) _calendar.UpdateClock(DateTimeOffset.UtcNow);
+        if (!visible) RefreshDisplayText();
+        LayoutContent();
+        if (Visible && !_previewWithoutActivation) KeepWithinWorkingArea();
+    }
+
+    public void PrepareOffscreenPreview()
+    {
+        _previewWithoutActivation = true;
+        TopMost = false;
+        Location = new Point(-10_000, -10_000);
+    }
+
+    protected override bool ShowWithoutActivation => _previewWithoutActivation;
 
     protected override CreateParams CreateParams
     {
@@ -126,7 +168,10 @@ public sealed class PopupForm : Form
         _planLabel.BackColor = _palette.Card;
         StyleButton(_refreshButton);
         StyleButton(_settingsButton);
+        StyleButton(_calendarToggle);
+        _calendar.ApplyTheme(_palette);
         RefreshDisplayText();
+        if (_calendarVisible) SetCalendarVisible(true);
         Invalidate();
     }
 
@@ -140,6 +185,7 @@ public sealed class PopupForm : Form
         _refreshButton.Text = refreshing ? "Refreshing…" : "Refresh";
         _messageLabel.ForeColor = error is null ? _palette.SecondaryText : _palette.Danger;
         RefreshDisplayText();
+        if (_calendarVisible) SetCalendarVisible(true);
         LayoutContent();
     }
 
@@ -224,6 +270,17 @@ public sealed class PopupForm : Form
         Location = new Point(x, y);
     }
 
+    private void KeepWithinWorkingArea()
+    {
+        var work = Screen.FromControl(this).WorkingArea;
+        var gap = LogicalToDeviceUnits(8);
+        var minimumX = work.Left + gap;
+        var minimumY = work.Top + gap;
+        var maximumX = Math.Max(minimumX, work.Right - Width - gap);
+        var maximumY = Math.Max(minimumY, work.Bottom - Height - gap);
+        Location = new Point(Math.Clamp(Left, minimumX, maximumX), Math.Clamp(Top, minimumY, maximumY));
+    }
+
     private void RefreshDisplayText()
     {
         if (_snapshot is null)
@@ -291,10 +348,20 @@ public sealed class PopupForm : Form
 
     private void LayoutContent()
     {
+        if (_calendarVisible)
+        {
+            _calendar.SetBounds(0, LogicalToDeviceUnits(25), LogicalToDeviceUnits(LogicalWidth),
+                LogicalToDeviceUnits(650) - LogicalToDeviceUnits(25));
+            SetLogicalBounds(_calendarToggle, LogicalWidth - 96, 1, 78, 23);
+            _calendarToggle.BringToFront();
+            ClientSize = new Size(LogicalToDeviceUnits(LogicalWidth), LogicalToDeviceUnits(650));
+            return;
+        }
         const int left = 18;
         const int contentWidth = LogicalWidth - (left * 2);
         SetLogicalBounds(_titleLabel, left, 15, 220, 28);
         SetLogicalBounds(_planLabel, LogicalWidth - 112, 18, 92, 24);
+        SetLogicalBounds(_calendarToggle, LogicalWidth - 181, 18, 64, 24);
         SetLogicalBounds(_accountLabel, left, 46, contentWidth, 21);
 
         var y = 77;

@@ -34,10 +34,11 @@ public sealed class CodexUsageService : IDisposable
         }
         catch (CodexUsageException exception) when (exception.Kind == CodexUsageErrorKind.Unauthorized)
         {
-            var refreshed = await _client.RefreshAsync(credentials, cancellationToken).ConfigureAwait(false);
-            credentials = await _credentialStore.SaveRefreshedAsync(credentials, refreshed, cancellationToken)
-                .ConfigureAwait(false);
-            json = await _client.GetUsageJsonAsync(credentials, cancellationToken).ConfigureAwait(false);
+            // This local build leaves refresh-token rotation exclusively to Codex.
+            // A process-local lock cannot coordinate writes with the running Codex app.
+            throw new CodexUsageException(
+                CodexUsageErrorKind.Unauthorized,
+                "Open Codex to renew your login, then refresh Codex Usage. This build never updates your login.");
         }
 
         var email = JwtClaimsReader.TryReadEmail(credentials.IdToken);

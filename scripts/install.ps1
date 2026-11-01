@@ -22,13 +22,13 @@ if (-not (Test-Path -LiteralPath $publishedExecutable)) {
     throw "Build output not found at $publishedExecutable. Run scripts\build.ps1 first."
 }
 
-$installDirectory = Join-Path $env:LOCALAPPDATA "Programs\CodexUsage"
+$installDirectory = Join-Path $env:LOCALAPPDATA "Programs\CodexUsageNotif"
 $installedExecutable = Join-Path $installDirectory "CodexUsage.exe"
 New-Item -ItemType Directory -Force -Path $installDirectory | Out-Null
 Copy-Item -LiteralPath $publishedExecutable -Destination $installedExecutable -Force
 
 $startMenuDirectory = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
-$shortcutPath = Join-Path $startMenuDirectory "Codex Usage.lnk"
+$shortcutPath = Join-Path $startMenuDirectory "Codex Usage Reset Calendar.lnk"
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $installedExecutable

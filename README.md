@@ -1,4 +1,51 @@
-# Codex Usage for Windows
+# Codex Usage — Reset Calendar (Windows)
+
+Private extension maintained by CZPavel, based on [Victor Zakharov's Codex Usage](https://github.com/VictorZakharov/codex-usage), upstream v0.2.7 / `75cf1eaad84c5794fdf733157bd443f8d1103800`. Original MIT license, copyright and authorship are retained in LICENSE and the upstream Git history.
+
+![Reset Calendar, synthetic data](screenshots/reset-calendar.png)
+
+## Changes in this fork
+
+- Compact **Reset Calendar** switch and tray menu, showing the last 30 calendar dates in **Europe/Prague**, including DST. Global, banked, announced and uncertain events have distinct markers and details.
+- Announcement timestamps remain distinct from effective timestamps. Missing scope, eligible plans and exact effective times remain unknown. A banked grant never advances the global-reset clock. Conflicting verification fields are treated conservatively.
+- External 24/48-hour forecast, clearly unofficial, experimental and not guaranteed. No local predictive model. Missing/invalid data displays `Není dostatek dat`.
+- Independent background reset refresh every 15 minutes, manual refresh, timeout, last-good local cache, separate endpoint freshness and error state.
+- Optional **Reset notifications** in the tray menu (off by default), with stable-ID deduplication stored across restarts. First retrieval establishes a silent baseline.
+- Codex credentials are **read only**: HTTP 401/403 asks you to renew login in Codex. This fork never refreshes or saves Codex credentials.
+- Runs alongside the original app with a separate mutex, settings/history/cache directory and startup registry value. The original installation is preserved.
+
+### External data and privacy
+
+Data: [codex-reset.com](https://codex-reset.com/), using public GET `/api/timeline` and `/api/forecast`, no API key. [API documentation and attribution terms](https://codex-reset.com/developers). The calendar includes visible linked attribution and the HTTP reader identifies this project. Refreshes respect the documented one-request-per-minute maximum and Retry-After. Requests carry no Codex tokens, account identifiers or usage data. This independent community source is not OpenAI and its events do not prove a reset of your personal account.
+
+The alternative [codexreset.dev public API](https://codexreset.dev/api/) was inspected. Its current archive labels some effective timestamps as announcement-based and records partial coverage, so it is not silently substituted as a verified source.
+
+On the development workstation AVG (Avast engine) blocked the primary forecast URL as `URL:Phishing`. A prior build ran and fetched timeline data, but AVG then quarantined the final installed executable with the same `URL:Phishing` classification. The final executable has NOT passed local runtime acceptance. No exception, quarantine restore or bypass was installed. Resolve the antivirus finding before running this build; do not disable protection. Network errors preserve cached data when the process is permitted to run. See VALIDATION.md.
+
+### Local installation and update
+
+Requires Windows 10/11. Build requires .NET 10 SDK; the self-contained x64 executable requires no installed .NET runtime.
+
+```powershell
+dotnet restore CodexUsage.sln
+dotnet format CodexUsage.sln --verify-no-changes --no-restore
+dotnet build CodexUsage.sln -c Release --no-restore
+dotnet run --project tests/CodexUsage.Tests -c Release --no-build
+.\scripts\build.ps1 -Architecture x64
+.\scripts\install.ps1 -SkipBuild
+```
+
+This fork installs under `%LOCALAPPDATA%\Programs\CodexUsageNotif` and creates **Codex Usage Reset Calendar** in the Start Menu. Exit the fork before updating its executable. Do not use an upstream installer to update this fork. Automatic startup is changed only when you explicitly enable it in this fork's UI; it uses `CodexUsageNotif`, leaving the original `CodexUsage` entry intact.
+
+Runtime files are local to `%LOCALAPPDATA%\CodexUsageNotif` and must never be committed. Existing settings and history were copied once from the original data directory for this workstation's first installation. The original files are not modified. New usage history continues independently.
+
+### Technical notes
+
+The original WinForms architecture and theme palette are retained. `Core/Resets` owns schema interpretation, UTC instants, Prague date selection, last-good caching and persisted notification IDs. `ResetCalendarControl` only presents data; `TrayApplicationContext` owns timers, asynchronous refresh and Windows tray balloons. Reset-service HTTP is isolated from the credential-bearing usage client. Tests use synthetic data and injected HTTP handlers. Preview images use synthetic events.
+
+---
+
+# Upstream application documentation
 
 A small, native Windows tray app for one job: keeping your OpenAI Codex usage visible.
 
@@ -32,7 +79,7 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 
 Codex Usage reuses the ChatGPT sign-in already stored by Codex in `%USERPROFILE%\.codex\auth.json` (or `$env:CODEX_HOME\auth.json`). It never asks for or stores a password, API key, cookie, or copied token.
 
-If the access token expires, the app uses the existing Codex refresh token and atomically updates the same auth file. It never writes credentials anywhere else and never logs token values. Network calls are limited to OpenAI's `chatgpt.com` usage service and `auth.openai.com` token service.
+This fork never refreshes or writes credentials. If authorization expires, renew the sign-in in Codex, then refresh here. Usage credentials are sent only to the existing `chatgpt.com` usage endpoint; public reset requests use a separate client without authorization.
 
 Use ChatGPT authentication rather than API-key authentication. OpenAI documents the supported Codex sign-in methods and the `codex login` flow in its [authentication guide](https://learn.chatgpt.com/docs/auth).
 
@@ -75,7 +122,7 @@ To install it for the current user and create a Start Menu shortcut:
 .\scripts\install.ps1
 ```
 
-The install script copies the app to `%LOCALAPPDATA%\Programs\CodexUsage`. Enable launch at sign-in from the tray menu or Settings.
+The install script copies the app to `%LOCALAPPDATA%\Programs\CodexUsageNotif`. Enable launch at sign-in from the tray menu or Settings.
 
 "Start with Windows" applies at the next full Windows sign-in or reboot; locking and unlocking the current session does not rerun startup apps. Windows may also delay `Run`-key applications briefly after sign-in.
 
@@ -95,8 +142,8 @@ dotnet run --project .\tests\CodexUsage.Tests\CodexUsage.Tests.csproj -- --live
 
 ## Privacy and limitations
 
-- Settings are stored in `%LOCALAPPDATA%\CodexUsage\settings.json`; no secrets are stored there.
-- Usage history is stored locally in `%LOCALAPPDATA%\CodexUsage\history.jsonl`. Flat duplicate readings are compressed, and history is limited to 90 days and 50,000 samples.
+- Settings are stored in `%LOCALAPPDATA%\CodexUsageNotif\settings.json`; no secrets are stored there.
+- Usage history is stored locally in `%LOCALAPPDATA%\CodexUsageNotif\history.jsonl`. Flat duplicate readings are compressed, and history is limited to 90 days and 50,000 samples.
 - Token totals are best-effort sums of the counters emitted in local `%CODEX_HOME%\sessions` and `archived_sessions` files. They include model-processing tokens such as cached context and non-visible output, so they do not map one-to-one to quota percentage and may be unavailable when local session counters are absent.
 - This is an independent, unofficial utility and is not affiliated with or endorsed by OpenAI.
 - Local release builds are unsigned, so Windows SmartScreen may show an unrecognized-app warning. Verify the adjacent SHA-256 file before running a distributed copy.
