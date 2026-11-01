@@ -132,7 +132,7 @@ internal static class PreviewRenderer
             var previewNow = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
             var events = new[]
             {
-                new ResetEvent("1", "Confirmed global reset", "https://codex-reset.com/", previewNow.AddDays(-5), previewNow.AddDays(-4), null, ResetKind.ConfirmedGlobal, "high", "verified"),
+                new ResetEvent("1", "Confirmed global reset", "https://codexreset.dev/", previewNow.AddDays(-5), previewNow.AddDays(-4), null, ResetKind.ConfirmedGlobal, "high", "verified"),
                 new ResetEvent("2", "Banked reset", null, null, previewNow.AddDays(-9), null, ResetKind.Banked, "high", "verified"),
                 new ResetEvent("3", "Announcement", null, previewNow.AddDays(-14), null, null, ResetKind.Announced, "medium", "announced"),
                 new ResetEvent("4", "Uncertain report", null, previewNow.AddDays(-20), null, null, ResetKind.Uncertain, "low", "unverified"),

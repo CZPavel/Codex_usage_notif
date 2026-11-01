@@ -8,7 +8,7 @@ Private extension maintained by CZPavel, based on [Victor Zakharov's Codex Usage
 
 - Compact **Reset Calendar** switch and tray menu, showing the last 30 calendar dates in **Europe/Prague**, including DST. Global, banked, announced and uncertain events have distinct markers and details.
 - Announcement timestamps remain distinct from effective timestamps. Missing scope, eligible plans and exact effective times remain unknown. A banked grant never advances the global-reset clock. Conflicting verification fields are treated conservatively.
-- External 24/48-hour forecast, clearly unofficial, experimental and not guaranteed. No local predictive model. Missing/invalid data displays `Není dostatek dat`.
+- Forecast section is clearly unofficial and not guaranteed. Current provider has no valid forecast: `Není dostatek dat`. No local predictive model or assumed probability units.
 - Independent background reset refresh every 15 minutes, manual refresh, timeout, last-good local cache, separate endpoint freshness and error state.
 - Optional **Reset notifications** in the tray menu (off by default), with stable-ID deduplication stored across restarts. First retrieval establishes a silent baseline.
 - Codex credentials are **read only**: HTTP 401/403 asks you to renew login in Codex. This fork never refreshes or saves Codex credentials.
@@ -16,11 +16,11 @@ Private extension maintained by CZPavel, based on [Victor Zakharov's Codex Usage
 
 ### External data and privacy
 
-Data: [codex-reset.com](https://codex-reset.com/), using public GET `/api/timeline` and `/api/forecast`, no API key. [API documentation and attribution terms](https://codex-reset.com/developers). The calendar includes visible linked attribution and the HTTP reader identifies this project. Refreshes respect the documented one-request-per-minute maximum and Retry-After. Requests carry no Codex tokens, account identifiers or usage data. This independent community source is not OpenAI and its events do not prove a reset of your personal account.
+Data: [codexreset.dev](https://codexreset.dev/), using public read-only GET `/api/history?lang=en` and `/api/forecast?lang=en`, no API key. [API documentation](https://codexreset.dev/api/). The calendar includes linked attribution and the HTTP reader identifies this project. Refreshes respect a one-request-per-minute maximum and Retry-After. Requests carry no Codex tokens, account identifiers or usage data. This community source is independent of OpenAI; its records do not prove a reset of your personal account.
 
-The alternative [codexreset.dev public API](https://codexreset.dev/api/) was inspected. Its current archive labels some effective timestamps as announcement-based and records partial coverage, so it is not silently substituted as a verified source.
+The originally requested primary provider `codex-reset.com` was inspected and integrated, but AVG (Avast engine) blocked its forecast URL and quarantined the associated installed build with `URL:Phishing`. The runtime source was therefore replaced with the available alternative explicitly listed in the task. No antivirus exception, quarantine restore or protection change was made. The current runtime does not contact the blocked provider. Its old parser is retained only for offline regression fixtures, and its cache is not reused.
 
-On the development workstation AVG (Avast engine) blocked the primary forecast URL as `URL:Phishing`. A prior build ran and fetched timeline data, but AVG then quarantined the final installed executable with the same `URL:Phishing` classification. The final executable has NOT passed local runtime acceptance. No exception, quarantine restore or bypass was installed. Resolve the antivirus finding before running this build; do not disable protection. Network errors preserve cached data when the process is permitted to run. See VALIDATION.md.
+The alternative currently supplies partial history, mostly `recorded` community archives without independent verification. These remain **Uncertain**, including archived banked announcements; their original event type, scope, source and provenance remain inspectable. Announcement/observation times are not actual reset times. Date-only evidence stays date-only. Current forecast values are null, so the UI correctly shows **Není dostatek dat**. No local probability model is substituted. Undocumented numeric probability units are not guessed. Confirmed notifications require explicit verified official evidence; unknown entries never notify. See [VALIDATION.md](VALIDATION.md).
 
 ### Local installation and update
 

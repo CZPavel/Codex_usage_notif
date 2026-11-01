@@ -30,6 +30,36 @@ internal static class ResetCalendarTests
         const string forecast = """
             {"updated_at":"2026-11-01T09:00:00Z","probabilities":{"rounded_24h":50,"rounded_48h":75},"confidence":"low","confidence_note":"Experimental","last_reset_at":"2026-10-28T06:35:38Z","backtest":{"status":"experimental"}}
             """;
+        const string alternativeEvents = """
+            {"events":[
+             {"id":"global","type":"global_reset","status":"confirmed","source_type":"official","verified_at":"2026-11-01T02:00:00Z","announced_at":"2026-10-31T19:00:00Z","effective_at":"2026-11-01T01:00:00Z","time_basis":"effective","time_precision":"minute","scope":"Eligible accounts","summary":"Global"},
+             {"id":"pending","type":"global_reset","status":"recorded","source_type":"community","verified_at":null,"announced_at":null,"effective_at":"2026-10-28T07:00:00Z","time_basis":"observation","time_precision":"minute"},
+             {"id":"banked","type":"banked_reset","status":"confirmed","source_type":"official","verified_at":"2026-09-12T15:45:27Z","announced_at":"2026-06-11","effective_at":"2026-06-11","time_precision":"day","notes":"Historical feature launch","plan":"Plus / Pro"},
+             {"id":"arriving","type":"global_reset","status":"announced","source_type":"official","announced_at":"2026-10-31T07:00:00Z","effective_at":"2026-11-01T07:00:00Z","time_basis":"effective"},
+             {"id":"unknown-banked","type":"banked_reset","status":"recorded","source_type":"community","verified_at":null,"announced_at":"2026-11-01T00:43:20Z","effective_at":"2026-11-01T00:43:20Z","time_basis":"announcement","archive_url":"https://example.com/archive","notes":"Not independently verified"}],"count":5,"coverage":"partial","timezone":"UTC"}
+            """;
+        const string alternativeForecast = """
+            {"generated_at":null,"probability_24h":null,"probability_48h":null,"confidence":"insufficient","sample_size":0,"model_version":"historical-gap-v1","explanation":["Insufficient history"]}
+            """;
+        var alternative = ResetCalendarParser.ParseHistory(alternativeEvents);
+        Check(alternative.Events.Count == 5 && alternative.UpdatedAt is null, "alternative history exact schema, no invented update time");
+        Check(alternative.Events[0].Kind == ResetKind.ConfirmedGlobal && alternative.Events[0].EffectiveAt is not null, "verified official effective global event");
+        Check(alternative.Events[1].Kind == ResetKind.Uncertain && alternative.Events[1].EffectiveAt is null
+            && alternative.Events[1].ObservedAt == DateTimeOffset.Parse("2026-10-28T07:00:00Z")
+            && alternative.Events[1].DisplayAt == alternative.Events[1].ObservedAt, "community observation stays unverified with observation timestamp");
+        Check(alternative.Events[2].Kind == ResetKind.Banked && alternative.Events[2].Date == new DateOnly(2026, 6, 11)
+            && alternative.Events[2].DisplayAt is null, "verified historical banked date remains date-only");
+        Check(alternative.Events[2].Audience.SequenceEqual(new[] { "Plus / Pro" }), "documented eligible plan retained as audience");
+        Check(alternative.Events[3].Kind == ResetKind.Announced && alternative.Events[3].EffectiveAt is null, "planned time not verified effect");
+        Check(alternative.Events[4].OriginalType == "banked_reset" && alternative.Events[4].Kind == ResetKind.Uncertain
+            && alternative.Events[4].EffectiveAt is null && alternative.Events[4].Notes == "Not independently verified"
+            && alternative.Events[4].ArchiveUrl == "https://example.com/archive", "archived banked retains original type and provenance without confirmation");
+        Check(ResetCalendarParser.ParseHistory(alternativeEvents.Replace("\"verified_at\":\"2026-11-01T02:00:00Z\"", "\"verified_at\":null", StringComparison.Ordinal)).Events[0].Kind == ResetKind.Uncertain,
+            "confirmed status without verification timestamp is insufficient");
+        Check(!ResetCalendarParser.ParseAlternativeForecast(alternativeForecast).HasData
+            && ResetCalendarParser.ParseAlternativeForecast(alternativeForecast).DisplayText == "Není dostatek dat", "alternative null probabilities unknown");
+        Check(!ResetCalendarParser.ParseAlternativeForecast(alternativeForecast.Replace("\"probability_24h\":null", "\"probability_24h\":0.5", StringComparison.Ordinal)).HasData,
+            "undocumented probability scale not guessed");
         var parsed = ResetCalendarParser.ParseTimeline(events);
         Check(parsed.Events.Count == 5, "ignore unrelated and undated malformed items");
         Check(parsed.Events.Single(e => e.Id == "global").Kind == ResetKind.ConfirmedGlobal, "confirmed global");
@@ -49,7 +79,7 @@ internal static class ResetCalendarTests
         var odds = ResetCalendarParser.ParseForecast(forecast);
         Check(odds.HasData && odds.Probability24Hours == 50 && odds.Probability48Hours == 75, "documented percent units");
         Check(odds.Confidence == "low" && odds.IsExperimental, "provider uncertainty retained");
-        Check(odds.DisplayText.Contains("codex-reset.com", StringComparison.Ordinal), "forecast attribution");
+        Check(odds.DisplayText.Contains("codexreset.dev", StringComparison.Ordinal), "forecast attribution");
         Check(!ResetCalendarParser.ParseForecast(forecast.Replace("\"rounded_48h\":75", "\"rounded_48h\":25", StringComparison.Ordinal)).HasData,
             "inconsistent 48-hour probability does not become valid forecast");
         Check(odds.RecentMedianDays is null, "missing optional historical median stays unknown");
@@ -87,8 +117,8 @@ internal static class ResetCalendarTests
         {
             var cachePath = Path.Combine(directory, "cache.json");
             var now = DateTimeOffset.Parse("2026-11-01T12:00:00Z");
-            var timeline = events;
-            var forecastJson = forecast;
+            var timeline = alternativeEvents;
+            var forecastJson = alternativeForecast;
             var timelineStatus = HttpStatusCode.OK;
             var forecastStatus = HttpStatusCode.OK;
             var calls = 0;
@@ -97,7 +127,8 @@ internal static class ResetCalendarTests
                 calls++;
                 Check(request.Headers.Authorization is null && !request.Headers.Contains("Cookie")
                     && request.Headers.UserAgent.ToString().Contains("CZPavel/Codex_usage_notif", StringComparison.Ordinal), "anonymous identifying reader without credentials or cookies");
-                var isTimeline = request.RequestUri!.AbsolutePath.EndsWith("timeline", StringComparison.Ordinal);
+                Check(request.RequestUri!.Host == "codexreset.dev" && request.RequestUri.Query == "?lang=en", "only alternative provider production endpoints");
+                var isTimeline = request.RequestUri.AbsolutePath.EndsWith("history", StringComparison.Ordinal);
                 var response = new HttpResponseMessage(isTimeline ? timelineStatus : forecastStatus)
                 { Content = new StringContent(isTimeline ? timeline : forecastJson, Encoding.UTF8, "application/json") };
                 if (response.StatusCode == HttpStatusCode.TooManyRequests)
@@ -108,12 +139,12 @@ internal static class ResetCalendarTests
             {
                 Check(service.LoadCached().Events.Count == 0, "missing cache allowed");
                 var first = await service.FetchAsync();
-                Check(first.Events.Count == 5 && first.Forecast!.HasData, "independent public endpoints loaded");
+                Check(first.Events.Count == 5 && first.Forecast is { HasData: false }, "independent alternative endpoints loaded with unknown forecast");
                 Check(service.ConsumeNewConfirmedEvents().Count == 0, "first run silent baseline");
                 await service.FetchAsync();
                 Check(calls == 2, "manual refresh obeys minimum one minute");
                 now += TimeSpan.FromMinutes(2);
-                timeline = events.Replace("\"id\":\"global\"", "\"id\":\"new-global\"", StringComparison.Ordinal);
+                timeline = alternativeEvents.Replace("\"id\":\"global\"", "\"id\":\"new-global\"", StringComparison.Ordinal);
                 forecastStatus = HttpStatusCode.ServiceUnavailable;
                 var partial = await service.FetchAsync();
                 Check(partial.TimelineFetchedAt == now && partial.ForecastFetchedAt == first.ForecastFetchedAt && partial.ForecastError is not null,
@@ -123,15 +154,15 @@ internal static class ResetCalendarTests
                 now += TimeSpan.FromMinutes(2);
                 timeline = "null";
                 forecastStatus = HttpStatusCode.OK;
-                forecastJson = forecast.Replace("50", "55", StringComparison.Ordinal);
+                forecastJson = alternativeForecast.Replace("Insufficient history", "Still insufficient", StringComparison.Ordinal);
                 var reverse = await service.FetchAsync();
                 Check(reverse.TimelineFetchedAt == partial.TimelineFetchedAt && reverse.TimelineError is not null
-                    && reverse.ForecastFetchedAt == now && reverse.Forecast!.Probability24Hours == 55, "malformed timeline independent of successful forecast");
+                    && reverse.ForecastFetchedAt == now && reverse.Forecast!.Note == "Still insufficient", "malformed timeline independent of successful forecast");
             }
             using (var restarted = new ResetCalendarService(cachePath, http, () => now))
             {
                 var cached = restarted.LoadCached();
-                Check(cached.Events.Any(e => e.Id == "new-global") && cached.Forecast!.Probability24Hours == 55, "last-good independently restored offline");
+                Check(cached.Events.Any(e => e.Id == "new-global") && cached.Forecast!.Note == "Still insufficient", "last-good independently restored offline");
                 Check(restarted.ConsumeNewConfirmedEvents().Count == 0, "persistent dedup survives restart");
                 timelineStatus = HttpStatusCode.TooManyRequests;
                 forecastStatus = HttpStatusCode.ServiceUnavailable;
@@ -147,19 +178,19 @@ internal static class ResetCalendarTests
             File.WriteAllText(cachePath, JsonSerializer.Serialize(new ResetCalendarService.Cache
             {
                 Timeline = "null",
-                Forecast = forecast,
+                Forecast = alternativeForecast,
                 ForecastFetchedAt = now
             }));
             using (var partialCache = new ResetCalendarService(cachePath, http))
             {
                 var restored = partialCache.LoadCached();
-                Check(restored.Events.Count == 0 && restored.TimelineError is not null && restored.Forecast!.HasData,
+                Check(restored.Events.Count == 0 && restored.TimelineError is not null && restored.Forecast is { HasData: false },
                     "damaged timeline cache does not hide valid forecast cache");
             }
             using (var unavailable = new ResetCalendarService(directory, http, () => now))
             {
                 timelineStatus = forecastStatus = HttpStatusCode.OK;
-                timeline = events;
+                timeline = alternativeEvents;
                 var data = await unavailable.FetchAsync();
                 Check(data.Events.Count > 0 && data.Forecast is not null, "unwritable cache does not break data refresh");
                 Check(unavailable.ConsumeNewConfirmedEvents().Count == 0, "cache failure suppresses notification safely");

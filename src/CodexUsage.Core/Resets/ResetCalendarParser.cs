@@ -5,6 +5,68 @@ namespace CodexUsage.Resets;
 
 public static class ResetCalendarParser
 {
+    public static (IReadOnlyList<ResetEvent> Events, DateTimeOffset? UpdatedAt) ParseHistory(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("events", out var events)
+            || events.ValueKind != JsonValueKind.Array)
+            throw new JsonException("Historie neobsahuje pole events.");
+        var result = new List<ResetEvent>();
+        foreach (var item in events.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || Text(item, "id") is not { Length: > 0 } id)
+                continue;
+            var type = Text(item, "type");
+            if (type is not ("global_reset" or "banked_reset")) continue;
+            var status = Text(item, "status");
+            var sourceType = Text(item, "source_type");
+            var verified = status == "confirmed" && Instant(item, "verified_at") is not null
+                && sourceType is "official" or "first_party";
+            var timeBasis = Text(item, "time_basis");
+            var dayOnly = Text(item, "time_precision") == "day";
+            var rawEffective = Instant(item, "effective_at");
+            var announced = dayOnly ? null : Instant(item, "announced_at");
+            var observed = !dayOnly && timeBasis == "observation" ? rawEffective : null;
+            var effective = !dayOnly && timeBasis == "effective" && verified ? rawEffective : null;
+            DateOnly? date = ParseDate(Text(item, "announced_at")) ?? ParseDate(Text(item, "effective_at"));
+            if (announced is null && observed is null && effective is null && date is null) continue;
+            var kind = verified ? type == "banked_reset" ? ResetKind.Banked : ResetKind.ConfirmedGlobal
+                : status == "announced" ? ResetKind.Announced : ResetKind.Uncertain;
+            result.Add(new ResetEvent(id, Text(item, "summary") ?? Text(item, "title") ?? "Bez popisu",
+                SafeUrl(Text(item, "source_url")), announced, effective, date, kind, null, status)
+            {
+                OriginalType = type,
+                Scope = Text(item, "scope"),
+                TimeKind = timeBasis,
+                ObservedAt = observed,
+                ArchiveUrl = SafeUrl(Text(item, "archive_url")),
+                Notes = Text(item, "notes"),
+                SourceType = sourceType,
+                Audience = Text(item, "plan") is { Length: > 0 } plan ? [plan] : []
+            });
+        }
+        // History has no published-update timestamp; retrieval and source-check times are not event updates.
+        return (result.DistinctBy(e => e.Id).ToArray(), null);
+    }
+
+    public static ResetForecast ParseAlternativeForecast(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("probability_24h", out _)
+            || !root.TryGetProperty("probability_48h", out _))
+            throw new JsonException("Odhad neobsahuje probability_24h / probability_48h.");
+        var explanations = root.TryGetProperty("explanation", out var explanation) && explanation.ValueKind == JsonValueKind.Array
+            ? explanation.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()) : [];
+        // The live API publishes null and its docs do not establish numeric units. Do not guess a percent scale.
+        return new ResetForecast(null, null, Text(root, "confidence"), string.Join(" ", explanations),
+            Instant(root, "generated_at"), null, false);
+    }
+
+    private static DateOnly? ParseDate(string? text) => DateOnly.TryParseExact(text, "yyyy-MM-dd",
+        CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : null;
+
     public static (IReadOnlyList<ResetEvent> Events, DateTimeOffset? UpdatedAt) ParseTimeline(string json)
     {
         using var document = JsonDocument.Parse(json);

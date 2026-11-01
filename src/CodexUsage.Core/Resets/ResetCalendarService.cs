@@ -6,7 +6,7 @@ namespace CodexUsage.Resets;
 /// <summary>Independent public data reader; never reads or writes Codex credentials.</summary>
 public sealed class ResetCalendarService : IDisposable
 {
-    public const string SourceUrl = "https://codex-reset.com/";
+    public const string SourceUrl = "https://codexreset.dev/";
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
     private readonly string _cachePath;
@@ -22,7 +22,7 @@ public sealed class ResetCalendarService : IDisposable
         Func<DateTimeOffset>? now = null)
     {
         _cachePath = cachePath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CodexUsageNotif", "reset-calendar.json");
+            "CodexUsageNotif", "reset-calendar-alt.json");
         _ownsHttp = httpClient is null;
         _http = httpClient ?? new HttpClient(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
         _now = now ?? (() => DateTimeOffset.UtcNow);
@@ -46,7 +46,7 @@ public sealed class ResetCalendarService : IDisposable
         {
             try
             {
-                var parsed = ResetCalendarParser.ParseTimeline(timeline);
+                var parsed = ResetCalendarParser.ParseHistory(timeline);
                 Current = Current with { Events = parsed.Events, TimelineUpdatedAt = parsed.UpdatedAt, TimelineFetchedAt = _cache.TimelineFetchedAt };
             }
             catch (JsonException) { Current = Current with { TimelineError = "Uložená historie resetů je poškozená." }; }
@@ -55,7 +55,7 @@ public sealed class ResetCalendarService : IDisposable
         {
             try
             {
-                Current = Current with { Forecast = ResetCalendarParser.ParseForecast(forecast), ForecastFetchedAt = _cache.ForecastFetchedAt };
+                Current = Current with { Forecast = ResetCalendarParser.ParseAlternativeForecast(forecast), ForecastFetchedAt = _cache.ForecastFetchedAt };
             }
             catch (JsonException) { Current = Current with { ForecastError = "Uložený odhad je poškozený." }; }
         }
@@ -69,8 +69,8 @@ public sealed class ResetCalendarService : IDisposable
         try
         {
             var now = _now();
-            var timelineTask = now >= _timelineNextAttempt ? ReadAsync("api/timeline?limit=50", cancellationToken) : Task.FromResult<ReadResult?>(null);
-            var forecastTask = now >= _forecastNextAttempt ? ReadAsync("api/forecast", cancellationToken) : Task.FromResult<ReadResult?>(null);
+            var timelineTask = now >= _timelineNextAttempt ? ReadAsync("api/history?lang=en", cancellationToken) : Task.FromResult<ReadResult?>(null);
+            var forecastTask = now >= _forecastNextAttempt ? ReadAsync("api/forecast?lang=en", cancellationToken) : Task.FromResult<ReadResult?>(null);
             await Task.WhenAll(timelineTask, forecastTask).ConfigureAwait(false);
             if (await timelineTask.ConfigureAwait(false) is { } timeline)
             {
@@ -79,7 +79,7 @@ public sealed class ResetCalendarService : IDisposable
                 {
                     try
                     {
-                        var parsed = ResetCalendarParser.ParseTimeline(json);
+                        var parsed = ResetCalendarParser.ParseHistory(json);
                         _cache.Timeline = json;
                         _cache.TimelineFetchedAt = now;
                         Current = Current with { Events = parsed.Events, TimelineUpdatedAt = parsed.UpdatedAt, TimelineFetchedAt = now, TimelineError = null };
@@ -95,7 +95,7 @@ public sealed class ResetCalendarService : IDisposable
                 {
                     try
                     {
-                        var parsed = ResetCalendarParser.ParseForecast(json);
+                        var parsed = ResetCalendarParser.ParseAlternativeForecast(json);
                         // Missing probabilities are a valid unknown result, never an implicit zero.
                         _cache.Forecast = json;
                         _cache.ForecastFetchedAt = now;
@@ -140,17 +140,17 @@ public sealed class ResetCalendarService : IDisposable
                 var delay = response.StatusCode == HttpStatusCode.TooManyRequests
                     ? response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date - _now()) : null;
                 if (delay < TimeSpan.FromMinutes(1)) delay = TimeSpan.FromMinutes(1);
-                return new(null, $"codex-reset.com: HTTP {(int)response.StatusCode}; zobrazena poslední platná data.", delay);
+                return new(null, $"codexreset.dev: HTTP {(int)response.StatusCode}; zobrazena poslední platná data.", delay);
             }
             return new(await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false), null, null);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new(null, "codex-reset.com: vypršel časový limit; zobrazena poslední platná data.", null);
+            return new(null, "codexreset.dev: vypršel časový limit; zobrazena poslední platná data.", null);
         }
         catch (HttpRequestException)
         {
-            return new(null, "codex-reset.com je nedostupný; zobrazena poslední platná data.", null);
+            return new(null, "codexreset.dev je nedostupný; zobrazena poslední platná data.", null);
         }
     }
 

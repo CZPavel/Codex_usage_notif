@@ -9,7 +9,14 @@ public sealed record ResetEvent(string Id, string Summary, string? SourceUrl,
     public string? Scope { get; init; }
     public IReadOnlyList<string> Audience { get; init; } = [];
     public string? TimeKind { get; init; }
-    public DateTimeOffset? DisplayAt => EffectiveAt ?? AnnouncedAt;
+    public string? OriginalType { get; init; }
+    public DateTimeOffset? ObservedAt { get; init; }
+    public string? ArchiveUrl { get; init; }
+    public string? Notes { get; init; }
+    public string? SourceType { get; init; }
+    public DateTimeOffset? DisplayAt => EffectiveAt ?? AnnouncedAt ?? ObservedAt;
+    /// <summary>Provider verification of this dated record, not current availability on the user's account.
+    /// A banked record may describe a historical feature launch; retain Notes and Scope in presentation.</summary>
     public bool IsConfirmed => Kind is ResetKind.ConfirmedGlobal or ResetKind.Banked;
 }
 
@@ -21,7 +28,7 @@ public sealed record ResetForecast(double? Probability24Hours, double? Probabili
     public bool HasData => Probability24Hours.HasValue && Probability48Hours.HasValue
         && Probability48Hours >= Probability24Hours;
     public string DisplayText => HasData
-        ? $"Odhad codex-reset.com: {Probability24Hours:0.#} % / 24 h, {Probability48Hours:0.#} % / 48 h"
+        ? $"Odhad codexreset.dev: {Probability24Hours:0.#} % / 24 h, {Probability48Hours:0.#} % / 48 h"
         : "Není dostatek dat";
 }
 

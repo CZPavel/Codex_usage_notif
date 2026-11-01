@@ -7,7 +7,7 @@ public sealed class ResetCalendarControl : Control
 {
     private readonly ToolTip _tooltip = new();
     private readonly LinkLabel _source = new() { Text = "Open event source" };
-    private readonly LinkLabel _attribution = new() { Text = "Data: codex-reset.com" };
+    private readonly LinkLabel _attribution = new() { Text = "Data: codexreset.dev" };
     private readonly Button _refresh = new() { Text = "Refresh", FlatStyle = FlatStyle.Flat };
     private ThemePalette _palette = ThemePalette.Resolve(Settings.ThemeMode.Dark);
     private ResetData? _data;
@@ -21,7 +21,7 @@ public sealed class ResetCalendarControl : Control
         Controls.AddRange([_source, _attribution, _refresh]);
         _refresh.Click += (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty);
         _source.LinkClicked += (_, _) => OpenHttps(_selected?.SourceUrl);
-        _attribution.LinkClicked += (_, _) => OpenHttps("https://codex-reset.com/");
+        _attribution.LinkClicked += (_, _) => OpenHttps("https://codexreset.dev/");
         MouseMove += (_, e) => UpdateTooltip(e.Location);
         MouseClick += (_, e) => SelectDay(e.Location);
     }
@@ -135,7 +135,7 @@ public sealed class ResetCalendarControl : Control
     private IEnumerable<ResetEvent> EventsOn(DateOnly date) => _data?.Events.Where(e => EventDate(e) == date) ?? [];
     private Color KindColor(ResetKind kind) => kind switch { ResetKind.ConfirmedGlobal => _palette.Success, ResetKind.Banked => _palette.Accent, ResetKind.Announced => _palette.Warning, _ => _palette.MutedText };
     private static string TimeText(DateTimeOffset? time) => time is null ? "unknown" : TimeZoneInfo.ConvertTime(time.Value, ResetData.PragueTimeZone).ToString("dd MMM yyyy HH:mm zzz");
-    private static string EventDetails(ResetEvent e) => $"Type: {e.Kind} · Verification: {e.VerificationStatus ?? "unknown"}\nEffective: {TimeText(e.EffectiveAt)}\nAnnounced: {TimeText(e.AnnouncedAt)}\nDate: {e.Date?.ToString("dd MMM yyyy") ?? "unknown"} · Confidence: {e.Confidence ?? "unknown"}\nScope: {e.Scope ?? "unknown"} · Audience: {(e.Audience.Count == 0 ? "unknown" : string.Join(", ", e.Audience))}\n{e.Summary}";
+    private static string EventDetails(ResetEvent e) => $"Type: {e.OriginalType ?? e.Kind.ToString()} ({e.Kind}) · Verification: {e.VerificationStatus ?? "unknown"}\nEffective: {TimeText(e.EffectiveAt)}\nAnnounced: {TimeText(e.AnnouncedAt)}\nObserved: {TimeText(e.ObservedAt)}\nDate: {e.Date?.ToString("dd MMM yyyy") ?? "unknown"} · Confidence: {e.Confidence ?? "unknown"}\nScope: {e.Scope ?? "unknown"} · Audience: {(e.Audience.Count == 0 ? "unknown" : string.Join(", ", e.Audience))}\n{e.Summary}\n{e.Notes}\nArchive: {e.ArchiveUrl ?? "unknown"}";
     private DateOnly? DayAt(Point point)
     {
         var s = DeviceDpi / 96f;
