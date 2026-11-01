@@ -28,6 +28,9 @@ public sealed class ResetCalendarControl : Control
 
     public event EventHandler? RefreshRequested;
 
+    public int VisibleEventCount => _data?.GetLast30Days(_now).Count ?? 0;
+    public int LoadedEventCount => _data?.Events.Count ?? 0;
+
     public void UpdateClock(DateTimeOffset now)
     {
         _now = now;
@@ -83,7 +86,7 @@ public sealed class ResetCalendarControl : Control
         using var muted = new SolidBrush(_palette.SecondaryText);
         using var border = new Pen(_palette.Border);
         g.DrawString("Reset calendar", title, text, 18, 7);
-        g.DrawString("Last 30 days · Europe/Prague", font, muted, 18, 35);
+        g.DrawString($"{VisibleEventCount} events / 30 days · Prague · {LoadedEventCount} loaded", font, muted, 18, 35);
         var start = PragueDate(_now).AddDays(-29);
         var offset = ((int)start.DayOfWeek + 6) % 7;
         string[] days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -94,21 +97,46 @@ public sealed class ResetCalendarControl : Control
             var slot = offset + i;
             var x = 18 + (slot % 7 * 49);
             var y = 77 + (slot / 7 * 36);
+            if (EventsOn(date).Any())
+            {
+                using var dayBrush = new SolidBrush(_palette.CardHover);
+                g.FillRectangle(dayBrush, x, y, 45, 33);
+            }
             g.DrawRectangle(border, x, y, 45, 33);
             g.DrawString(date.Day == 1 || i == 0 ? date.ToString("d MMM") : date.Day.ToString(), small, text, x + 3, y + 1);
             var events = EventsOn(date).Take(4).ToArray();
             for (var j = 0; j < events.Length; j++)
             {
-                using var marker = new SolidBrush(KindColor(events[j].Kind));
-                g.FillEllipse(marker, x + 3 + (j * 10), y + 21, 7, 7);
+                var item = events[j];
+                var markerColor = item.Kind == ResetKind.Uncertain ? item.OriginalType switch
+                {
+                    "global_reset" => _palette.Success,
+                    "banked_reset" => _palette.Accent,
+                    _ => _palette.MutedText,
+                } : KindColor(item.Kind);
+                if (item.Kind == ResetKind.Uncertain)
+                {
+                    using var outline = new Pen(markerColor, 1.5f);
+                    g.DrawEllipse(outline, x + 3 + (j * 10), y + 21, 7, 7);
+                }
+                else
+                {
+                    using var marker = new SolidBrush(markerColor);
+                    g.FillEllipse(marker, x + 3 + (j * 10), y + 21, 7, 7);
+                }
             }
         }
-        var legend = new[] { ("Global", _palette.Success), ("Banked", _palette.Accent), ("Announced", _palette.Warning), ("Uncertain", _palette.MutedText) };
+        var legend = new[] { ("Global", _palette.Success), ("Banked", _palette.Accent), ("Announced", _palette.Warning), ("Unverified", _palette.MutedText) };
         var lx = 18;
         foreach (var (name, color) in legend)
         {
             using var brush = new SolidBrush(color);
-            g.FillEllipse(brush, lx, 304, 7, 7);
+            if (name == "Unverified")
+            {
+                using var outline = new Pen(color, 1.5f);
+                g.DrawEllipse(outline, lx, 304, 7, 7);
+            }
+            else g.FillEllipse(brush, lx, 304, 7, 7);
             g.DrawString(name, small, muted, lx + 9, 300);
             lx += name == "Announced" ? 82 : 66;
         }
@@ -123,7 +151,10 @@ public sealed class ResetCalendarControl : Control
         DrawWrapped(g, forecastText, small, muted, 18, 512, 344, 41);
         var age = _data?.TimelineUpdatedAt is DateTimeOffset updated ? $"Timeline data {FormatElapsed(_now - updated)} old" : _data?.TimelineFetchedAt is DateTimeOffset fetched ? $"Timeline fetched {FormatElapsed(_now - fetched)} ago (source age unknown)" : "Timeline unavailable / offline";
         var forecastAge = _data?.Forecast?.UpdatedAt is DateTimeOffset forecastUpdated ? $"Forecast data {FormatElapsed(_now - forecastUpdated)} old" : _data?.ForecastFetchedAt is DateTimeOffset forecastFetched ? $"Forecast fetched {FormatElapsed(_now - forecastFetched)} ago (source age unknown)" : "Forecast unavailable / offline";
-        DrawWrapped(g, $"{age} · {_data?.TimelineError}\n{forecastAge} · {_data?.ForecastError}", small, muted, 18, 590, 344, 35);
+        var origin = _data?.TimelineSource ?? "cache / not loaded";
+        var status = $"{origin}{(_data?.IsPartial == true ? " · partial" : "")} · {age} · {_data?.TimelineError}\n{forecastAge} · {_data?.ForecastError} {_data?.StatusNote}";
+        DrawWrapped(g, status, small, muted, 18, 590, 344, 35);
+        _tooltip.SetToolTip(_refresh, status);
     }
 
     private static void DrawWrapped(Graphics g, string value, Font font, Brush brush, int x, int y, int width, int height) => g.DrawString(value, font, brush, new RectangleF(x, y, width, height));

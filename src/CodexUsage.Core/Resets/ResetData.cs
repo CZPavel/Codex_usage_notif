@@ -40,6 +40,9 @@ public sealed record ResetData
     public DateTimeOffset? TimelineFetchedAt { get; init; }
     public DateTimeOffset? ForecastFetchedAt { get; init; }
     public DateTimeOffset? TimelineUpdatedAt { get; init; }
+    public string? TimelineSource { get; init; }
+    public bool IsPartial { get; init; }
+    public string? StatusNote { get; init; }
     public string? TimelineError { get; init; }
     public string? ForecastError { get; init; }
 

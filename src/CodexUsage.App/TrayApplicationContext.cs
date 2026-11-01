@@ -34,10 +34,13 @@ public sealed class TrayApplicationContext : ApplicationContext
     private HistoryForm? _historyForm;
     private bool _refreshing;
     private bool _firstIdleHandled;
+    private readonly System.Windows.Forms.Timer _activationTimer = new() { Interval = 250 };
+    private readonly bool _showOnStart;
     private int _loadingAnimationFrame;
 
-    public TrayApplicationContext()
+    public TrayApplicationContext(SingleInstanceGuard? singleInstance = null, bool showOnStart = false)
     {
+        _showOnStart = showOnStart;
         _settings = _settingsStore.Load();
         _popup = new PopupForm(_settings);
         _popup.RefreshRequested += async (_, _) => await RefreshAsync();
@@ -121,6 +124,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         _resetTimer.Start();
 
         UpdateIcon(error: false);
+        _activationTimer.Tick += (_, _) =>
+        {
+            if (singleInstance?.TakeActivationRequest() == true) _popup.ShowNearTray();
+        };
+        _activationTimer.Start();
         Application.Idle += OnFirstIdle;
     }
 
@@ -135,6 +143,8 @@ public sealed class TrayApplicationContext : ApplicationContext
             _refreshTimer.Dispose();
             _resetTimer.Stop();
             _resetTimer.Dispose();
+            _activationTimer.Stop();
+            _activationTimer.Dispose();
             _resetService.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
@@ -157,6 +167,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _firstIdleHandled = true;
         Application.Idle -= OnFirstIdle;
+        if (_showOnStart) _popup.ShowNearTray();
         await Task.WhenAll(RefreshAsync(), RefreshResetsAsync());
     }
 

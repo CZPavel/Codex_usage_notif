@@ -1,5 +1,17 @@
 # Validation — 2026-11-01
 
+## Follow-up fixes
+
+- Final suite now passes 288 assertions (149 reset-service assertions), plus UI/DPI and single-instance guard checks. Release build and formatting pass without warnings.
+- An opt-in live test starts with a completely empty temporary cache: first fetch returned 71 historical events, 13 within the displayed 30 Prague calendar days, source history, partial coverage. No Codex credentials are read by this check.
+- Actual installed application cache renders those 13 events. Previously all recent recorded/unverified entries were tiny gray dots; counts, highlighted dates and outlined type colors now make loaded data explicit without claiming verification.
+- History failure, malformed/empty/old-only results try status and then latest. Old-only status does not stop the latest fallback. Tests cover retained archive, partial provenance, restart, throttling and silent recovery of historical notifications.
+- Named activation event reopens the existing popup when another fork copy launches. A shared legacy mutex also prevents simultaneous upstream/fork tray instances; original installation and startup settings remain unchanged. An actual second launch from the build directory exited while one installed process remained.
+- Desktop shortcut created and verified: Codex Usage Reset Calendar.lnk, targeting the installed fork executable. Tests also cover restart and conflict with a legacy instance.
+- Current final binary SHA-256: d3fdbd72a55dcc8fff433b9bac2fdc9eb40381582ec3d7a71b07e1ce50b75700 . The baseline validation below describes the initial version before this follow-up.
+
+Endpoint assessment: [reset-api.md](docs/reset-api.md).
+
 Upstream identified from running installed process and file metadata: VictorZakharov/codex-usage v0.2.7, commit 75cf1eaad84c5794fdf733157bd443f8d1103800. Original local read-only-auth patch retained. Original process/install, settings and autostart left intact. Original history/settings copied once to a separate runtime directory; never included in Git.
 
 ## Passed in final version

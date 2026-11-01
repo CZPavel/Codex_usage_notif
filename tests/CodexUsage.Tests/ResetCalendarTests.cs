@@ -115,6 +115,7 @@ internal static class ResetCalendarTests
         Directory.CreateDirectory(directory);
         try
         {
+            await RunFallbackTestsAsync(Check, directory, alternativeEvents, alternativeForecast);
             var cachePath = Path.Combine(directory, "cache.json");
             var now = DateTimeOffset.Parse("2026-11-01T12:00:00Z");
             var timeline = alternativeEvents;
@@ -144,7 +145,8 @@ internal static class ResetCalendarTests
                 await service.FetchAsync();
                 Check(calls == 2, "manual refresh obeys minimum one minute");
                 now += TimeSpan.FromMinutes(2);
-                timeline = alternativeEvents.Replace("\"id\":\"global\"", "\"id\":\"new-global\"", StringComparison.Ordinal);
+                timeline = alternativeEvents.Replace("\"id\":\"global\"", "\"id\":\"new-global\"", StringComparison.Ordinal)
+                    .Replace("2026-11-01T01:00:00Z", "2026-11-01T12:01:00Z", StringComparison.Ordinal);
                 forecastStatus = HttpStatusCode.ServiceUnavailable;
                 var partial = await service.FetchAsync();
                 Check(partial.TimelineFetchedAt == now && partial.ForecastFetchedAt == first.ForecastFetchedAt && partial.ForecastError is not null,
@@ -198,6 +200,155 @@ internal static class ResetCalendarTests
         }
         finally { Directory.Delete(directory, recursive: true); }
         return assertions;
+    }
+
+    private static async Task RunFallbackTestsAsync(Action<bool, string> check, string directory, string archive, string forecast)
+    {
+        var now = DateTimeOffset.Parse("2026-11-01T12:00:00Z");
+        var history = archive;
+        var status = archive;
+        var latest = "{}";
+        var historyCode = HttpStatusCode.OK;
+        var statusCode = HttpStatusCode.OK;
+        var latestCode = HttpStatusCode.OK;
+        var requests = new List<string>();
+        var statusRetry = TimeSpan.FromMinutes(5);
+        using var http = new HttpClient(new Handler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            requests.Add(path);
+            check(request.RequestUri.Host == "codexreset.dev" && request.RequestUri.Query == "?lang=en"
+                && request.Headers.Authorization is null && !request.Headers.Contains("Cookie"), "fallback uses anonymous same-host endpoints");
+            var (code, body) = path switch
+            {
+                "/api/history" => (historyCode, history),
+                "/api/status" => (statusCode, status),
+                "/api/latest" => (latestCode, latest),
+                "/api/forecast" => (HttpStatusCode.OK, forecast),
+                _ => throw new InvalidOperationException("Unexpected endpoint")
+            };
+            var response = new HttpResponseMessage(code) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            if (path == "/api/status" && code == HttpStatusCode.TooManyRequests)
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(statusRetry);
+            return response;
+        }));
+        var cachePath = Path.Combine(directory, "fallback.json");
+        using (var service = new ResetCalendarService(cachePath, http, () => now))
+        {
+            var first = await service.FetchAsync();
+            check(first.Events.Any(e => e.Date == new DateOnly(2026, 6, 11)) && first.Events.Count == 5,
+                "first fetch contains earlier archive dates without waiting for new events");
+            check(first.TimelineSource == "history" && first.IsPartial, "provider partial coverage retained");
+            check(service.ConsumeNewConfirmedEvents().Count == 0, "archive baseline silent");
+            now += TimeSpan.FromMinutes(2);
+            historyCode = HttpStatusCode.ServiceUnavailable;
+            status = archive.Replace("\"id\":\"pending\"", "\"id\":\"status-only\"", StringComparison.Ordinal);
+            var fallback = await service.FetchAsync();
+            check(fallback.TimelineSource == "status" && fallback.IsPartial && fallback.StatusNote is not null
+                && fallback.Events.Count == 6, "failed history uses status and merges stable IDs without losing archive");
+            now += TimeSpan.FromMinutes(2);
+            historyCode = HttpStatusCode.OK;
+            history = "{\"events\":[]}";
+            check((await service.FetchAsync()).TimelineSource == "status", "empty valid history uses status");
+            now += TimeSpan.FromMinutes(2);
+            statusCode = HttpStatusCode.TooManyRequests;
+            using var document = JsonDocument.Parse(archive);
+            latest = JsonSerializer.Serialize(new
+            {
+                latestGlobalReset = document.RootElement.GetProperty("events")[0],
+                latestVerifiedReset = document.RootElement.GetProperty("events")[0],
+                latestBankedReset = (object?)null,
+                latestResetEvent = (object?)null
+            });
+            var minimal = await service.FetchAsync();
+            check(minimal.TimelineSource == "latest" && minimal.IsPartial && minimal.Events.Count == 6,
+                "status unavailable uses latest nullable objects, deduplicates and retains old history");
+            var statusCalls = requests.Count(p => p == "/api/status");
+            var calls = requests.Count;
+            await service.FetchAsync();
+            check(requests.Count == calls, "every endpoint respects minimum 60 seconds");
+            now += TimeSpan.FromMinutes(2);
+            await service.FetchAsync();
+            check(requests.Count(p => p == "/api/status") == statusCalls, "status Retry-After isolated from history/latest/forecast");
+        }
+        using (var restart = new ResetCalendarService(cachePath, http, () => now))
+        {
+            var restored = restart.LoadCached();
+            check(restored.TimelineSource == "latest" && restored.IsPartial && restored.Events.Count == 6
+                && restored.StatusNote is not null, "merged history and fallback provenance survive restart");
+            check(restart.ConsumeNewConfirmedEvents().Count == 0, "restart does not repeat baseline");
+            historyCode = statusCode = latestCode = HttpStatusCode.ServiceUnavailable;
+            check((await restart.FetchAsync()).Events.Count == 6, "offline cache retained across all failed endpoints");
+            now += TimeSpan.FromMinutes(2);
+            historyCode = HttpStatusCode.OK;
+            history = archive.Replace("\"id\":\"global\"", "\"id\":\"recovered-historical\"", StringComparison.Ordinal);
+            var recovered = await restart.FetchAsync();
+            check(recovered.Events.Count == 7 && recovered.TimelineSource == "history", "recovered history merges previously missing old IDs");
+            check(restart.ConsumeNewConfirmedEvents().Count == 0, "historical backfill never floods notifications");
+        }
+        using (var initialFallback = new ResetCalendarService(Path.Combine(directory, "initial-fallback.json"), http, () => now))
+        {
+            history = "broken";
+            statusCode = HttpStatusCode.OK;
+            var data = await initialFallback.FetchAsync();
+            check(data.TimelineSource == "status" && data.GetLast30Days(now).Count > 0, "parse failure uses status on first run");
+            check(initialFallback.ConsumeNewConfirmedEvents().Count == 0, "first successful fallback establishes silent baseline");
+            now += TimeSpan.FromMinutes(2);
+            history = archive.Replace("\"id\":\"global\"", "\"id\":\"old-backfill-after-fallback\"", StringComparison.Ordinal);
+            await initialFallback.FetchAsync();
+            check(initialFallback.ConsumeNewConfirmedEvents().Count == 0, "archive recovery after initial fallback suppresses historical notification flood");
+        }
+        using (var oldHistory = new ResetCalendarService(Path.Combine(directory, "old-history.json"), http, () => now))
+        {
+            history = archive.Replace("2026-11-01", "2026-09-01", StringComparison.Ordinal)
+                .Replace("2026-10-", "2026-08-", StringComparison.Ordinal);
+            var data = await oldHistory.FetchAsync();
+            check(data.TimelineSource == "status" && data.GetLast30Days(now).Count > 0, "archive missing recent window checks status without losing old records");
+        }
+        using (var oldStatus = new ResetCalendarService(Path.Combine(directory, "old-status.json"), http, () => now))
+        {
+            historyCode = HttpStatusCode.ServiceUnavailable;
+            status = archive.Replace("2026-11-01", "2026-09-01", StringComparison.Ordinal)
+                .Replace("2026-10-", "2026-08-", StringComparison.Ordinal)
+                .Replace("\"id\":\"global\"", "\"id\":\"old-status-global\"", StringComparison.Ordinal);
+            statusCode = latestCode = HttpStatusCode.OK;
+            var data = await oldStatus.FetchAsync();
+            check(data.TimelineSource == "latest" && data.IsPartial && data.GetLast30Days(now).Count > 0
+                && data.Events.Any(e => e.Id == "old-status-global"),
+                "old-only status is retained while latest supplies recent calendar events");
+        }
+        using (var onlyOldFallback = new ResetCalendarService(Path.Combine(directory, "only-old-fallback.json"), http, () => now))
+        {
+            latest = "{\"latestResetEvent\":null}";
+            var data = await onlyOldFallback.FetchAsync();
+            check(data.Events.Count > 0 && data.GetLast30Days(now).Count == 0 && data.IsPartial
+                && data.TimelineSource == "status" && data.TimelineFetchedAt is not null && data.TimelineError is null,
+                "old-only fallback remains valid partial evidence when latest has no recent data");
+        }
+        using (var timeoutHttp = new HttpClient(new Handler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/forecast") throw new OperationCanceledException();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(request.RequestUri.AbsolutePath == "/api/history" ? "broken" : archive)
+            };
+        })))
+        using (var timeoutService = new ResetCalendarService(Path.Combine(directory, "timeout.json"), timeoutHttp, () => now))
+        {
+            var data = await timeoutService.FetchAsync();
+            check(data.TimelineSource == "status" && data.Events.Count == 5 && data.ForecastError is not null,
+                "forecast timeout cannot suppress successful fallback timeline");
+        }
+        using (var unknown = new ResetCalendarService(Path.Combine(directory, "unknown.json"), http, () => now))
+        {
+            history = status = "{\"events\":[]}";
+            latest = "{\"latestResetEvent\":null}";
+            latestCode = HttpStatusCode.OK;
+            var data = await unknown.FetchAsync();
+            check(data.Events.Count == 0 && data.TimelineFetchedAt is null && data.TimelineError is not null,
+                "all unknown remains unknown with no fabricated events");
+            check(unknown.ConsumeNewConfirmedEvents().Count == 0, "no-data cannot create baseline notifications");
+        }
     }
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

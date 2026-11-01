@@ -124,7 +124,8 @@ internal static class PreviewRenderer
             return true;
         }
 
-        if (args[0].Equals("--render-calendar", StringComparison.OrdinalIgnoreCase)
+        if (args[0].Equals("--render-calendar-cache", StringComparison.OrdinalIgnoreCase)
+            || args[0].Equals("--render-calendar", StringComparison.OrdinalIgnoreCase)
             || args[0].Equals("--render-calendar=dark", StringComparison.OrdinalIgnoreCase)
             || args[0].Equals("--render-calendar=light", StringComparison.OrdinalIgnoreCase))
         {
@@ -138,7 +139,14 @@ internal static class PreviewRenderer
                 new ResetEvent("4", "Uncertain report", null, previewNow.AddDays(-20), null, null, ResetKind.Uncertain, "low", "unverified"),
             };
             using var calendarForm = new PopupForm(new AppSettings { Theme = theme });
-            calendarForm.UpdateResetData(new ResetData { Events = events, TimelineFetchedAt = previewNow, ForecastFetchedAt = previewNow, Forecast = new ResetForecast(15, 28, "low", null, previewNow, null, true) }, false, previewNow);
+            var previewData = new ResetData { Events = events, TimelineFetchedAt = previewNow, ForecastFetchedAt = previewNow, Forecast = new ResetForecast(15, 28, "low", null, previewNow, null, true) };
+            if (args[0].Equals("--render-calendar-cache", StringComparison.OrdinalIgnoreCase))
+            {
+                using var cacheReader = new ResetCalendarService();
+                previewData = cacheReader.LoadCached();
+                previewNow = DateTimeOffset.UtcNow;
+            }
+            calendarForm.UpdateResetData(previewData, false, previewNow);
             calendarForm.PrepareOffscreenPreview();
             calendarForm.SetCalendarVisible(true);
             calendarForm.Show();

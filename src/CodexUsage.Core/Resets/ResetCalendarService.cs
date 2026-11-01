@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.Json;
 
 namespace CodexUsage.Resets;
@@ -15,6 +14,8 @@ public sealed class ResetCalendarService : IDisposable
     private Cache _cache = new();
     private DateTimeOffset _timelineNextAttempt;
     private DateTimeOffset _forecastNextAttempt;
+    private DateTimeOffset _statusNextAttempt;
+    private DateTimeOffset _latestNextAttempt;
 
     public ResetData Current { get; private set; } = new();
 
@@ -51,6 +52,14 @@ public sealed class ResetCalendarService : IDisposable
             }
             catch (JsonException) { Current = Current with { TimelineError = "Uložená historie resetů je poškozená." }; }
         }
+        if (_cache.Events is { } savedEvents)
+            Current = Current with { Events = savedEvents, TimelineFetchedAt = _cache.TimelineFetchedAt, TimelineError = null };
+        Current = Current with
+        {
+            TimelineSource = _cache.TimelineSource ?? (Current.Events.Count > 0 ? "history" : null),
+            IsPartial = _cache.IsPartial || (_cache.TimelineSource is null && Current.Events.Count > 0),
+            StatusNote = _cache.StatusNote
+        };
         if (_cache.Forecast is { } forecast)
         {
             try
@@ -69,28 +78,12 @@ public sealed class ResetCalendarService : IDisposable
         try
         {
             var now = _now();
-            var timelineTask = now >= _timelineNextAttempt ? ReadAsync("api/history?lang=en", cancellationToken) : Task.FromResult<ReadResult?>(null);
+            var timelineTask = RefreshTimelineAsync(now, cancellationToken);
             var forecastTask = now >= _forecastNextAttempt ? ReadAsync("api/forecast?lang=en", cancellationToken) : Task.FromResult<ReadResult?>(null);
             await Task.WhenAll(timelineTask, forecastTask).ConfigureAwait(false);
-            if (await timelineTask.ConfigureAwait(false) is { } timeline)
-            {
-                _timelineNextAttempt = now + (timeline.RetryAfter ?? TimeSpan.FromMinutes(1));
-                if (timeline.Json is { } json)
-                {
-                    try
-                    {
-                        var parsed = ResetCalendarParser.ParseHistory(json);
-                        _cache.Timeline = json;
-                        _cache.TimelineFetchedAt = now;
-                        Current = Current with { Events = parsed.Events, TimelineUpdatedAt = parsed.UpdatedAt, TimelineFetchedAt = now, TimelineError = null };
-                    }
-                    catch (JsonException) { Current = Current with { TimelineError = "Neplatná odpověď historie resetů; zobrazena poslední platná data." }; }
-                }
-                else Current = Current with { TimelineError = timeline.Error };
-            }
             if (await forecastTask.ConfigureAwait(false) is { } forecast)
             {
-                _forecastNextAttempt = now + (forecast.RetryAfter ?? TimeSpan.FromMinutes(1));
+                _forecastNextAttempt = _now() + Delay(forecast);
                 if (forecast.Json is { } json)
                 {
                     try
@@ -123,8 +116,84 @@ public sealed class ResetCalendarService : IDisposable
         var baseline = _cache.BaselineEstablished;
         _cache.Seen = _cache.Seen.Concat(unseen.Select(Key)).Distinct(StringComparer.Ordinal).ToArray();
         _cache.BaselineEstablished = true;
-        return SaveCache() && baseline ? unseen : [];
+        _cache.BaselineAt ??= _now();
+        var baselineDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(_cache.BaselineAt.Value, ResetData.PragueTimeZone).DateTime);
+        var newEvents = unseen.Where(e => e.DisplayAt is { } at ? at >= _cache.BaselineAt : e.Date >= baselineDate).ToArray();
+        return SaveCache() && baseline ? newEvents : [];
     }
+
+    private async Task RefreshTimelineAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (now < _timelineNextAttempt) return;
+        var history = await ReadAsync("api/history?lang=en", cancellationToken).ConfigureAwait(false);
+        _timelineNextAttempt = _now() + Delay(history);
+        IReadOnlyList<ResetEvent>? historyEvents = null;
+        string? error = history?.Error;
+        if (history?.Json is { } json)
+        {
+            try { historyEvents = ResetCalendarParser.ParseHistory(json).Events; }
+            catch (JsonException) { error = "Neplatná odpověď historie resetů; zobrazena poslední platná data."; }
+        }
+        if (historyEvents is { Count: > 0 })
+        {
+            // Preserve the entire archive, including entries outside the visible 30-day window.
+            ApplyTimeline(historyEvents, "history", now, history!.Json);
+            if (HasRecent(historyEvents, now)) return;
+        }
+        else error ??= "Historie resetů je prázdná; náhradní zdroje nejsou dostupné.";
+
+        var fallbackApplied = false;
+        foreach (var source in new[] { "status", "latest" })
+        {
+            var nextAttempt = source == "status" ? _statusNextAttempt : _latestNextAttempt;
+            if (now < nextAttempt) continue;
+            var response = await ReadAsync($"api/{source}?lang=en", cancellationToken).ConfigureAwait(false);
+            if (source == "status") _statusNextAttempt = _now() + Delay(response);
+            else _latestNextAttempt = _now() + Delay(response);
+            if (response?.Json is not { } fallback) continue;
+            try
+            {
+                var events = source == "status" ? ResetCalendarParser.ParseHistory(fallback).Events : ResetCalendarParser.ParseLatest(fallback);
+                if (events.Count == 0) continue;
+                ApplyTimeline(events, source, now, null);
+                fallbackApplied = true;
+                if (source == "latest" || HasRecent(events, now)) return;
+            }
+            catch (JsonException) { /* An unavailable fallback must never replace a good archive. */ }
+        }
+        if (!fallbackApplied && historyEvents is not { Count: > 0 })
+            Current = Current with { TimelineError = error ?? "Historie resetů není dostupná; zobrazena poslední platná data." };
+    }
+
+    private void ApplyTimeline(IReadOnlyList<ResetEvent> events, string source, DateTimeOffset now, string? historyJson)
+    {
+        var merged = events.Concat(Current.Events).DistinctBy(e => e.Id).ToArray();
+        var partial = source != "history" || ResetCalendarParser.IsPartialHistory(historyJson!);
+        var note = source != "history" ? $"Náhradní zdroj /api/{source}; historie může být neúplná."
+            : partial ? "Poskytovatel nezaručuje úplný archiv resetů." : null;
+        _cache.Events = merged;
+        if (historyJson is not null) _cache.Timeline = historyJson;
+        _cache.TimelineFetchedAt = now;
+        _cache.TimelineSource = source;
+        _cache.IsPartial = partial;
+        _cache.StatusNote = note;
+        Current = Current with
+        {
+            Events = merged,
+            TimelineFetchedAt = now,
+            TimelineUpdatedAt = null,
+            TimelineError = null,
+            TimelineSource = source,
+            IsPartial = partial,
+            StatusNote = note
+        };
+    }
+
+    private static bool HasRecent(IReadOnlyList<ResetEvent> events, DateTimeOffset now)
+        => new ResetData { Events = events }.GetLast30Days(now).Count > 0;
+
+    private static TimeSpan Delay(ReadResult? response)
+        => response?.RetryAfter is { } delay && delay > TimeSpan.FromMinutes(1) ? delay : TimeSpan.FromMinutes(1);
 
     private async Task<ReadResult?> ReadAsync(string relativeUrl, CancellationToken cancellationToken)
     {
@@ -137,8 +206,7 @@ public sealed class ResetCalendarService : IDisposable
             using var response = await _http.SendAsync(request, timeout.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                var delay = response.StatusCode == HttpStatusCode.TooManyRequests
-                    ? response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date - _now()) : null;
+                var delay = response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date - _now());
                 if (delay < TimeSpan.FromMinutes(1)) delay = TimeSpan.FromMinutes(1);
                 return new(null, $"codexreset.dev: HTTP {(int)response.StatusCode}; zobrazena poslední platná data.", delay);
             }
@@ -185,6 +253,11 @@ public sealed class ResetCalendarService : IDisposable
     public sealed class Cache
     {
         public string? Timeline { get; set; }
+        public ResetEvent[]? Events { get; set; }
+        public string? TimelineSource { get; set; }
+        public bool IsPartial { get; set; }
+        public string? StatusNote { get; set; }
+        public DateTimeOffset? BaselineAt { get; set; }
         public string? Forecast { get; set; }
         public DateTimeOffset? TimelineFetchedAt { get; set; }
         public DateTimeOffset? ForecastFetchedAt { get; set; }

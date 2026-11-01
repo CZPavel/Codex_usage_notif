@@ -31,6 +31,7 @@ internal static class Program
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
             _assertions += ResetCalendarTests.Run();
             ResetCalendarUiTests.Run();
+            SingleInstanceGuardTests.Run();
             ParserReadsStandardUsage();
             ParserHandlesStringValuesAndAdditionalLimits();
             CredentialParserReadsSnakeAndCamelCase();
@@ -51,6 +52,9 @@ internal static class Program
             TokenUsageReaderAggregatesPeriodResetAndToday();
             PopupLayoutSurvivesDpiChange();
             HistoryLayoutSurvivesDpiChange();
+
+            if (args.Contains("--live-resets", StringComparer.OrdinalIgnoreCase))
+                await RunLiveResetCheckAsync().ConfigureAwait(false);
 
             if (args.Contains("--live", StringComparer.OrdinalIgnoreCase))
             {
@@ -940,6 +944,22 @@ internal static class Program
             null,
             [],
             fetchedAt);
+
+    private static async Task RunLiveResetCheckAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codexusage-public-reset-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var service = new CodexUsage.Resets.ResetCalendarService(Path.Combine(directory, "fresh-cache.json"));
+            if (service.LoadCached().Events.Count != 0) throw new InvalidOperationException("Fresh reset cache was not empty");
+            var data = await service.FetchAsync().ConfigureAwait(false);
+            if (data.Events.Count == 0) throw new InvalidOperationException(data.TimelineError ?? "Public reset source returned no history");
+            Console.WriteLine($"PUBLIC RESET API: fresh cache, {data.Events.Count} historical events, {data.GetLast30Days(DateTimeOffset.UtcNow).Count} in last 30 days, source={data.TimelineSource}, partial={data.IsPartial}");
+            if (service.ConsumeNewConfirmedEvents().Count != 0) throw new InvalidOperationException("Historical first load must not notify");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
 
     private static async Task RunLiveCheckAsync()
     {

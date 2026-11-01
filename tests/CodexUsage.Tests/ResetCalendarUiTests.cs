@@ -25,7 +25,10 @@ internal static class ResetCalendarUiTests
         {
             using var form = new PopupForm(new AppSettings { Theme = theme });
             _ = form.Handle;
-            form.UpdateResetData(data, false);
+            form.UpdateResetData(data, false, now);
+            var calendar = form.Controls.OfType<ResetCalendarControl>().Single();
+            if (calendar.LoadedEventCount != 4 || calendar.VisibleEventCount != 3)
+                throw new InvalidOperationException("Loaded history did not reach calendar presentation");
             form.SetCalendarVisible(true);
             form.PrepareOffscreenPreview();
             form.Show();

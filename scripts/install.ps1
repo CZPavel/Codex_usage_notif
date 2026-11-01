@@ -36,6 +36,14 @@ $shortcut.WorkingDirectory = $installDirectory
 $shortcut.Description = "Codex usage limits in the Windows system tray"
 $shortcut.Save()
 
+$desktopDirectory = [Environment]::GetFolderPath("DesktopDirectory")
+$desktopShortcutPath = Join-Path $desktopDirectory "Codex Usage Reset Calendar.lnk"
+$desktopShortcut = $shell.CreateShortcut($desktopShortcutPath)
+$desktopShortcut.TargetPath = $installedExecutable
+$desktopShortcut.WorkingDirectory = $installDirectory
+$desktopShortcut.Description = "Codex usage and reset calendar"
+$desktopShortcut.Save()
+
 Write-Host "Installed Codex Usage to $installedExecutable"
 Write-Host "A Start Menu shortcut was created at $shortcutPath"
 

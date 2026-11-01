@@ -50,6 +50,24 @@ public static class ResetCalendarParser
         return (result.DistinctBy(e => e.Id).ToArray(), null);
     }
 
+    public static IReadOnlyList<ResetEvent> ParseLatest(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Latest neobsahuje objekt.");
+        var events = new List<JsonElement>();
+        foreach (var name in new[] { "latestGlobalReset", "latestBankedReset", "latestResetEvent", "latestVerifiedReset" })
+            if (document.RootElement.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.Object)
+                events.Add(item);
+        return ParseHistory(JsonSerializer.Serialize(new { events })).Events;
+    }
+
+    public static bool IsPartialHistory(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return Text(document.RootElement, "coverage") != "complete";
+    }
+
     public static ResetForecast ParseAlternativeForecast(string json)
     {
         using var document = JsonDocument.Parse(json);

@@ -13,16 +13,15 @@ internal static class Program
             return;
         }
 
-        using var singleInstance = new Mutex(
-            initiallyOwned: true,
-            name: "Local\\CodexUsageNotif.Tray.SingleInstance",
-            createdNew: out var isFirstInstance);
-
-        if (!isFirstInstance)
+        using var singleInstance = new SingleInstanceGuard();
+        if (!singleInstance.IsFirstInstance)
         {
+            if (singleInstance.LegacyInstanceRunning)
+                MessageBox.Show("The original Codex Usage is running. Quit it from its tray menu, then open Reset Calendar again. Your original installation is preserved.",
+                    "Codex Usage Reset Calendar", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-
-        Application.Run(new TrayApplicationContext());
+        Application.Run(new TrayApplicationContext(singleInstance,
+            showOnStart: !args.Contains("--background", StringComparer.OrdinalIgnoreCase)));
     }
 }

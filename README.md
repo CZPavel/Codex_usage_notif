@@ -9,10 +9,10 @@ Private extension maintained by CZPavel, based on [Victor Zakharov's Codex Usage
 - Compact **Reset Calendar** switch and tray menu, showing the last 30 calendar dates in **Europe/Prague**, including DST. Global, banked, announced and uncertain events have distinct markers and details.
 - Announcement timestamps remain distinct from effective timestamps. Missing scope, eligible plans and exact effective times remain unknown. A banked grant never advances the global-reset clock. Conflicting verification fields are treated conservatively.
 - Forecast section is clearly unofficial and not guaranteed. Current provider has no valid forecast: `Není dostatek dat`. No local predictive model or assumed probability units.
-- Independent background reset refresh every 15 minutes, manual refresh, timeout, last-good local cache, separate endpoint freshness and error state.
+- Historical backfill immediately at startup, then refresh every 15 minutes. Fallback history, status, latest preserves the local archive. The calendar shows record counts, source and partial coverage; unverified global/banked events use colored outlines.
 - Optional **Reset notifications** in the tray menu (off by default), with stable-ID deduplication stored across restarts. First retrieval establishes a silent baseline.
 - Codex credentials are **read only**: HTTP 401/403 asks you to renew login in Codex. This fork never refreshes or saves Codex credentials.
-- Runs alongside the original app with a separate mutex, settings/history/cache directory and startup registry value. The original installation is preserved.
+- One tray instance across fork copies and the original installation. Reopening the fork activates its existing popup. If the original version is already running, quit it first. Original installation and startup settings are preserved; fork data remains separate.
 
 ### External data and privacy
 
@@ -35,11 +35,13 @@ dotnet run --project tests/CodexUsage.Tests -c Release --no-build
 .\scripts\install.ps1 -SkipBuild
 ```
 
-This fork installs under `%LOCALAPPDATA%\Programs\CodexUsageNotif` and creates **Codex Usage Reset Calendar** in the Start Menu. Exit the fork before updating its executable. Do not use an upstream installer to update this fork. Automatic startup is changed only when you explicitly enable it in this fork's UI; it uses `CodexUsageNotif`, leaving the original `CodexUsage` entry intact.
+This fork installs under `%LOCALAPPDATA%\Programs\CodexUsageNotif` and creates **Codex Usage Reset Calendar** in the Start Menu and on the desktop. Launching the shortcut opens the current popup instead of creating another tray icon. Exit the fork before updating its executable. Do not use an upstream installer to update this fork. Automatic startup is changed only when you explicitly enable it in this fork's UI; it uses `CodexUsageNotif`, leaving the original `CodexUsage` entry intact.
 
 Runtime files are local to `%LOCALAPPDATA%\CodexUsageNotif` and must never be committed. Existing settings and history were copied once from the original data directory for this workstation's first installation. The original files are not modified. New usage history continues independently.
 
 ### Technical notes
+
+See the [public API and fallback assessment](docs/reset-api.md). `--render-calendar-cache output.png` renders the actual public reset cache for offline UI diagnostics. The opt-in test flag `--live-resets` verifies initial historical backfill into a fresh temporary cache without reading Codex credentials.
 
 The original WinForms architecture and theme palette are retained. `Core/Resets` owns schema interpretation, UTC instants, Prague date selection, last-good caching and persisted notification IDs. `ResetCalendarControl` only presents data; `TrayApplicationContext` owns timers, asynchronous refresh and Windows tray balloons. Reset-service HTTP is isolated from the credential-bearing usage client. Tests use synthetic data and injected HTTP handlers. Preview images use synthetic events.
 
